@@ -1,0 +1,49 @@
+#!/bin/bash
+# Matrix HUD — phosphor green on black
+PLUGIN_DIR="$HOME/.config/sketchybar/plugins"
+export GREEN=0xff00ff41
+export MIDGREEN=0xff00b32c
+export DIMGREEN=0xff008f11
+BG=0xf00d0208
+
+sketchybar --bar position=top height=30 color=$BG padding_left=10 padding_right=10 topmost=window
+
+sketchybar --default \
+  icon.font="Cica:Bold:15.0" icon.color=$GREEN \
+  label.font="Cica:Bold:13.0" label.color=$GREEN \
+  padding_left=6 padding_right=6 label.padding_left=4 icon.padding_right=4
+
+sketchybar --add item logo left \
+  --set logo icon="⣠⣾⣿" icon.color=$GREEN label.drawing=off \
+  click_script="launchctl kickstart -k gui/$(id -u)/local.matrix.sketchybar"
+
+sketchybar --add item front_app left \
+  --set front_app icon.drawing=off label.padding_right=10 script="$PLUGIN_DIR/front_app.sh" \
+  --subscribe front_app front_app_switched
+
+sketchybar --add item clock right \
+  --set clock update_freq=1 icon.drawing=off script="$PLUGIN_DIR/clock.sh"
+
+sketchybar --add item battery right \
+  --set battery update_freq=60 script="$PLUGIN_DIR/battery.sh"
+
+sketchybar --add item cpu right \
+  --set cpu icon="処" icon.color=$MIDGREEN update_freq=5 script="$PLUGIN_DIR/cpu.sh"
+
+sketchybar --add item secure right \
+  --set secure drawing=off update_freq=2 icon="⊠" icon.color=0xff7dff9a \
+  label="LINE SECURE" label.color=0xff7dff9a script="$PLUGIN_DIR/secure.sh"
+
+# Write-in code rain in the bar center: 21 fixed-width one-glyph items
+# animated at 4 fps by a persistent loop (rain_loop.sh). Fixed label.width
+# keeps the strip's footprint constant so it never stretches.
+for i in {0..20}; do
+  sketchybar --add item rain.$i center \
+    --set rain.$i icon.drawing=off label="·" label.color=0x55008f11 \
+    label.width=12 label.align=center \
+    padding_left=0 padding_right=0 label.padding_left=0 label.padding_right=0
+done
+pkill -f "plugins/rain_loop.sh" 2>/dev/null
+nohup "$PLUGIN_DIR/rain_loop.sh" >/dev/null 2>&1 &
+
+sketchybar --update

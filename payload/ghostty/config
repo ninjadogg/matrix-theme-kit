@@ -1,0 +1,61 @@
+# Ghostty — Matrix
+# Palette ported verbatim from the Terminal.app "Matrix" profile.
+
+font-family = Cica
+font-size = 16
+font-thicken = true
+
+# Cica's cell is narrower than Menlo's; a little extra leading keeps the
+# scanline feel the Terminal profile had at 1.12 height spacing.
+adjust-cell-height = 12%
+
+# Opaque on purpose: the shader supplies the background, so transparency here
+# would composite the desktop under the rain instead of behind the text.
+background = #000000
+background-opacity = 1
+foreground = #00ff41
+
+cursor-color = #00ff41
+cursor-style = block
+cursor-style-blink = true
+selection-background = #0c3b18
+selection-foreground = #e8ffe8
+
+palette = 0=#0a0f0a
+palette = 1=#ff5555
+palette = 2=#00ff41
+palette = 3=#b5e853
+palette = 4=#00b84a
+palette = 5=#4cff89
+palette = 6=#00d9a0
+palette = 7=#a8ffb0
+palette = 8=#1f3d1f
+palette = 9=#ff8080
+palette = 10=#66ff88
+palette = 11=#d4ff6a
+palette = 12=#00e85c
+palette = 13=#8cffb8
+palette = 14=#5cffd0
+palette = 15=#e8ffe8
+
+custom-shader = __HOME__/.config/ghostty/shaders/matrix.glsl
+custom-shader-animation = true
+
+window-padding-x = 10
+window-padding-y = 6
+window-theme = dark
+macos-titlebar-style = tabs
+mouse-hide-while-typing = true
+
+# Terminal.app's Matrix profile geometry
+window-width = 120
+window-height = 34
+
+# Fullscreen as a borderless window instead of a macOS Space, so the
+# SketchyBar HUD (topmost=window) stays visible over it.
+macos-non-native-fullscreen = true
+
+# Hide Ghostty's floating secure-input icon (it lands under the HUD in
+# fullscreen); SketchyBar shows a LINE SECURE indicator instead.
+# Auto secure input itself stays on (macos-auto-secure-input default true).
+macos-secure-input-indication = false

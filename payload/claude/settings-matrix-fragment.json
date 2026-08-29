@@ -1,0 +1,84 @@
+{
+  "theme": "custom:matrix",
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  },
+  "spinnerTipsOverride": {
+    "excludeDefault": true,
+    "label": "オラクル",
+    "tips": [
+      "There is no spoon",
+      "I can only show you the door — you have to walk through it",
+      "Don't think you are. Know you are.",
+      "Everything that has a beginning has an end",
+      "You didn't come here to make the choice — you've already made it",
+      "Being the One is just like being in love — no one can tell you you're in it",
+      "We can never see past the choices we don't understand",
+      "What do all men with power want? More power.",
+      "Know thyself",
+      "Fate, it seems, is not without a sense of irony"
+    ]
+  },
+  "companyAnnouncements": [
+    "Wake up, Neo…",
+    "The Matrix has you",
+    "Follow the white rabbit",
+    "Knock, knock, Neo.",
+    "Welcome to the desert of the real",
+    "The answer is out there, and it's looking for you",
+    "Operator standing by"
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"— TRANSMISSION COMPLETE —\"}'"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "afplay -v 0.5 ~/Library/Sounds/MatrixRingLong.aiff 2>/dev/null || true",
+            "async": true
+          }
+        ]
+      }
+    ]
+  },
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": [
+      "Jacking in",
+      "Following the white rabbit",
+      "Bending spoons",
+      "Dodging bullets",
+      "Downloading kung fu",
+      "Tracing the call",
+      "Freeing your mind",
+      "Reading the code rain",
+      "Searching for the One",
+      "Answering the hard line",
+      "Taking the red pill",
+      "Operating",
+      "ジャッキング・イン",
+      "ホワイトラビットヲツイセキ",
+      "スプーンヲマゲル",
+      "バレットタイム",
+      "カンフーヲダウンロード",
+      "コールヲトレース",
+      "マインドヲカイホウ",
+      "コードレインヲカイドク",
+      "ザ・ワンヲソウサク",
+      "ハードラインニオウトウ",
+      "レッドピルヲセンタク",
+      "オペレーティング"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+.DS_Store
+*.tgz
+# bring-your-own ring (never committed)
+matrix-ring.*
