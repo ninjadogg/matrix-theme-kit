@@ -113,7 +113,12 @@ final class MatrixRainView: ScreenSaverView {
         let m = ("ﾊ" as NSString).size(withAttributes: [.font: font])
         cellW = max(m.width, pt * 0.6)
         cellH = pt * 1.25
-        rows = max(1, Int(bounds.height / cellH))
+        // Overscan one cell past the top and bottom edges (columns already
+        // overscan horizontally): integer truncation leaves a sub-cell strip
+        // below the last row, and the burn-in drift shifts the lattice by up
+        // to a full cell — cos(0)=1 means maximum upward shift at launch, so
+        // without overscan the saver opens with a black band along the bottom.
+        rows = max(1, Int(ceil(bounds.height / cellH)) + 3)
         let ncols = max(1, Int(bounds.width / cellW)) + 2
         columns = (0..<ncols).map { _ in makeColumn(initial: true) }
         gridSize = bounds.size
@@ -178,7 +183,7 @@ final class MatrixRainView: ScreenSaverView {
                 else if d < 3 { tier = 1 }
                 else if d < Double(col.length) * 0.55 { tier = 2 }
                 else { tier = 3 }
-                let y = bounds.height - CGFloat(r + 1) * cellH + shiftY
+                let y = bounds.height - CGFloat(r - 1) * cellH + shiftY
                 if let s = sprite(col.glyphs[r % col.glyphs.count], tier) {
                     ctx.draw(s.img, in: CGRect(x: x, y: y, width: s.w, height: s.h))
                 }
