@@ -36,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///    StatusIndicators, permanently present while the camera is in use.
     /// Both fallbacks were tried and both were worse than none.
     private var paused = false
+    private var frames = 0
+    private var lastFPSReport = Date()
+    private var activity: NSObjectProtocol?
 
     private var desktopLevel: NSWindow.Level {
         NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
@@ -43,6 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         mlog("launched; screens=\(NSScreen.screens.count)")
+        // ProcessType=Background + LSUIElement makes this agent a prime App Nap
+        // target: napped timers coalesce to ~1Hz (worse in Low Power Mode) and
+        // the rain crawls. Visible desktop animation is user-facing work.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "desktop rain animation")
         ensureHotKey()
         rebuild(reason: "startup")
 
@@ -88,7 +97,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func onPause(_ n: Notification)  { setPaused(true,  reason: n.name.rawValue) }
-    @objc private func onResume(_ n: Notification) { setPaused(false, reason: n.name.rawValue) }
+    @objc private func onResume(_ n: Notification) {
+        setPaused(false, reason: n.name.rawValue)
+        // Both ScreenSaverEngine and legacyScreenSaver.appex can linger after
+        // dismissal, animating offscreen; a headless lingering engine also
+        // blinds the launchd watchdog, whose rule is engine-alive == saver
+        // genuinely up. didstop is the event-precise dismissal signal, so
+        // sweep shortly after it — unless the saver started again meanwhile.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, !self.paused else { return }
+            for name in ["ScreenSaverEngine", "legacyScreenSaver"] {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+                p.arguments = ["-f", name]
+                try? p.run()
+            }
+            mlog("post-dismissal sweep of lingering saver processes")
+        }
+    }
 
     private func setPaused(_ p: Bool, reason: String) {
         guard p != paused else { return }
@@ -108,10 +134,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func step() {
         if paused { return }
-        tickParity ^= 1
-        if onBattery && tickParity == 0 { return }        // half rate on battery
+        // No battery half-rate: measured cost is ~0.2% of a core — the real
+        // savings come from occlusion gating and the pause-under-saver flag.
+        var drew = false
         for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
             views[i].animateOneFrame()
+            drew = true
+        }
+        if drew { frames += 1 }
+        let now = Date()
+        let dt = now.timeIntervalSince(lastFPSReport)
+        if dt >= 10 {
+            let scale = views.first?.scaleDebug ?? "no views"
+            mlog(String(format: "fps=%.1f (\(frames) frames/%.0fs) \(scale)", Double(frames)/dt, dt))
+            frames = 0; lastFPSReport = now
         }
     }
 

@@ -33,8 +33,10 @@ final class MatrixRainView: ScreenSaverView {
     private var cellW: CGFloat = 12
     private var cellH: CGFloat = 16
     private var rows: Int = 0
-    /// Desktop mode trades density for CPU: larger cells (fewer blits per frame)
-    /// and sparser columns. The screensaver keeps the dense look.
+    /// Desktop mode differs only in behavior (occlusion gating; frames driven
+    /// by main.swift's timer). The grid is identical to the screensaver's —
+    /// larger/sparser desktop variants were tried and read as a scaled-down,
+    /// thinned-out version of the saver.
     @objc static var desktopMode = false
     private struct Sprite { let img: CGImage; let w: CGFloat; let h: CGFloat }
     private static var glyphCache: [String: Sprite] = [:]
@@ -91,6 +93,19 @@ final class MatrixRainView: ScreenSaverView {
         needsDisplay = true
     }
 
+    /// AppKit asks before propagating a window's backing scale to the layer;
+    /// without this it may leave (or reset) contentsScale at 1x and the layer
+    /// gets nearest-upscaled — the exact blur this class works to avoid.
+    func layer(_ layer: CALayer, shouldInheritContentsScale newScale: CGFloat,
+               from window: NSWindow) -> Bool {
+        true
+    }
+
+    /// Ground truth for logs: what we rasterize at vs what the layer says.
+    var scaleDebug: String {
+        "renderScale=\(renderScale) layerScale=\(layer?.contentsScale ?? -1)"
+    }
+
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateRenderScale()              // display changed under us; re-match it
@@ -108,7 +123,7 @@ final class MatrixRainView: ScreenSaverView {
 
     private func buildGrid() {
         Self.glyphCache.removeAll()
-        let pt: CGFloat = isPreview ? 7 : (Self.desktopMode ? 22 : 16)
+        let pt: CGFloat = isPreview ? 7 : 16
         font = NSFont(name: "Menlo", size: pt)
             ?? NSFont.monospacedSystemFont(ofSize: pt, weight: .regular)
         let m = ("ﾊ" as NSString).size(withAttributes: [.font: font])
@@ -126,10 +141,7 @@ final class MatrixRainView: ScreenSaverView {
     }
 
     private func makeColumn(initial: Bool) -> Column {
-        // On the desktop, start many columns far above the viewport so roughly a
-        // third of them are dormant at any moment.
-        let gap = Self.desktopMode ? Double.random(in: -140 ... -1)
-                                   : Double.random(in: -20 ... -1)
+        let gap = Double.random(in: -20 ... -1)
         return Column(
             head: initial ? Double.random(in: 0...Double(rows) * 1.3) : gap,
             speed: Double.random(in: 0.25...1.1),
