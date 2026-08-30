@@ -11,7 +11,8 @@ statusline, and the spinner verbs running live in your browser.
 ## What you get
 
 - **Live code-rain wallpaper** — a native Swift app that rains behind your
-  desktop icons, pauses when covered or on battery, and survives login races.
+  desktop icons at native Retina scale, pauses when covered or while the
+  screensaver runs, and survives login races.
   **⌃⌥⌘M** launches the matching **screensaver** on demand.
 - **Ghostty** theme with a GLSL shader that rains *behind* your terminal text
   (with a halo so text stays readable), plus matching **Terminal.app** profiles.
@@ -84,14 +85,29 @@ mv ~/.zshrc.pre-matrix ~/.zshrc
 Then re-pick your accent color, alert sound, and Terminal profile in System
 Settings. Claude Code settings back up to `~/.claude/settings.json.pre-matrix`.
 
+## Performance
+
+Measured on an M1 MacBook Air, on battery with Low Power Mode active:
+
+| State | Cost |
+|---|---|
+| Wallpaper covered by opaque windows | 0 frames drawn, ~0.1% of one core |
+| Wallpaper visible | steady 12 fps at native Retina scale (strict dispatch timer — Low Power Mode can't coalesce it) |
+| Screensaver while displayed | ~20% of one core (full-screen 1:1 glyph sprites at 12 fps) |
+| After the screensaver is dismissed | lingering `ScreenSaverEngine`/`legacyScreenSaver` processes swept within 8 s |
+
+The sweep matters: macOS never tells the screensaver appex to stop, so
+without it the rain keeps rendering offscreen forever — the stock behavior
+costs a third of a core, invisibly, until reboot. Both apps render via
+pre-rasterized per-glyph CGImage sprites; the desktop and saver share one
+grid so they look identical.
+
 ## Notes & quirks
 
 - SketchyBar runs with `topmost=window`; if an app launched later covers it,
   click the braille logo to restart the bar. No bar in fullscreen Spaces
   (macOS behavior) — the Ghostty config uses non-native fullscreen so the HUD
   stays visible there.
-- The screensaver renders via pre-rasterized CGImage sprites; it's cheap, and
-  the wallpaper drops to 4fps on battery and 0 when fully covered.
 - The wallpaper app is unsigned (ad-hoc, built on your machine); macOS may ask
   for approval under Privacy & Security on first login.
 
