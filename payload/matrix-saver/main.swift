@@ -23,6 +23,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onBattery = false
     private var tickParity = 0
     private var hotkeyOK = false
+    /// The desktop window still reports occlusionState .visible underneath a
+    /// running screensaver, so the guard in step() never fires and we draw rain
+    /// nobody can see. Track it explicitly.
+    ///
+    /// Notifications are the WHOLE mechanism, deliberately:
+    ///  - legacyScreenSaver.appex stays RESIDENT long after the saver is
+    ///    dismissed, so "is the process alive" is NOT ground truth — using it
+    ///    pinned this paused and froze the desktop.
+    ///  - The screensaver's window is absent from CGWindowList, and the only
+    ///    things above screenSaverWindow level are the 28x28 camera/mic
+    ///    StatusIndicators, permanently present while the camera is in use.
+    /// Both fallbacks were tried and both were worse than none.
+    private var paused = false
 
     private var desktopLevel: NSWindow.Level {
         NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
@@ -54,11 +67,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.watchdog()
             }
         }
+
+        // This app is .accessory/LSUIElement, and distributed notifications to a
+        // background app are SUSPENDED unless immediate delivery is requested.
+        // The block-based addObserver cannot set that and silently never fires.
+        let dnc = DistributedNotificationCenter.default()
+        for (name, sel) in [("com.apple.screensaver.didstart", #selector(onPause(_:))),
+                            ("com.apple.screensaver.didstop",  #selector(onResume(_:))),
+                            ("com.apple.screenIsLocked",       #selector(onPause(_:))),
+                            ("com.apple.screenIsUnlocked",     #selector(onResume(_:)))] {
+            dnc.addObserver(self, selector: sel,
+                            name: NSNotification.Name(name), object: nil,
+                            suspensionBehavior: .deliverImmediately)
+        }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
                 self?.rebuild(reason: "screen change")
         }
+    }
+
+    @objc private func onPause(_ n: Notification)  { setPaused(true,  reason: n.name.rawValue) }
+    @objc private func onResume(_ n: Notification) { setPaused(false, reason: n.name.rawValue) }
+
+    private func setPaused(_ p: Bool, reason: String) {
+        guard p != paused else { return }
+        paused = p
+        mlog(p ? "paused (\(reason))" : "resumed (\(reason))")
     }
 
     // MARK: - hotkey
@@ -72,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - animation
 
     private func step() {
+        if paused { return }
         tickParity ^= 1
         if onBattery && tickParity == 0 { return }        // 4fps on battery
         for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
