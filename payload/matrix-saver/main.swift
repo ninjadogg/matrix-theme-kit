@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///    StatusIndicators, permanently present while the camera is in use.
     /// Both fallbacks were tried and both were worse than none.
     private var paused = false
+    private var locked = false
     private var frames = 0
     private var ticks = 0
     private var visibleTicks = 0
@@ -90,11 +91,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dnc = DistributedNotificationCenter.default()
         for (name, sel) in [("com.apple.screensaver.didstart", #selector(onPause(_:))),
                             ("com.apple.screensaver.didstop",  #selector(onResume(_:))),
-                            ("com.apple.screenIsLocked",       #selector(onPause(_:))),
-                            ("com.apple.screenIsUnlocked",     #selector(onResume(_:)))] {
+                            ("com.apple.screenIsLocked",       #selector(onLock(_:))),
+                            ("com.apple.screenIsUnlocked",     #selector(onUnlock(_:)))] {
             dnc.addObserver(self, selector: sel,
                             name: NSNotification.Name(name), object: nil,
                             suspensionBehavior: .deliverImmediately)
+        }
+
+        // Lock-screen rain: macOS keeps a running screensaver as the live
+        // backdrop of the lock UI, but only timer luck decides whether one is
+        // running when the lock engages. Kill the luck: start the saver on
+        // lock, stop it when the panel sleeps (nothing to see, don't burn
+        // battery), and start it again on wake-while-locked so the rain is
+        // already falling when the clock appears.
+        let wnc = NSWorkspace.shared.notificationCenter
+        wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification,
+                        object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.locked else { return }
+            self.sweepSaverProcesses()
+            mlog("display slept while locked: saver stopped")
+        }
+        wnc.addObserver(forName: NSWorkspace.screensDidWakeNotification,
+                        object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.locked else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.locked else { return }
+                self.launchSaverIfNeeded(reason: "display woke while locked")
+            }
         }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -104,6 +127,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func onPause(_ n: Notification)  { setPaused(true,  reason: n.name.rawValue) }
+
+    @objc private func onLock(_ n: Notification) {
+        locked = true
+        setPaused(true, reason: n.name.rawValue)
+        launchSaverIfNeeded(reason: "screen locked")
+    }
+
+    @objc private func onUnlock(_ n: Notification) {
+        locked = false
+        setPaused(false, reason: n.name.rawValue)
+        // The saver engine is dismissed by authentication; sweep any lingerers.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, !self.paused else { return }
+            self.sweepSaverProcesses()
+            mlog("post-unlock sweep of lingering saver processes")
+        }
+    }
+
+    private func launchSaverIfNeeded(reason: String) {
+        let engineRunning = NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == "com.apple.ScreenSaver.Engine"
+        }
+        guard !engineRunning else { return }
+        matrixStartScreensaver()
+        mlog("lock-screen rain: launched saver (\(reason))")
+    }
+
+    private func sweepSaverProcesses() {
+        for name in ["ScreenSaverEngine", "legacyScreenSaver"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            p.arguments = ["-f", name]
+            try? p.run()
+        }
+    }
     @objc private func onResume(_ n: Notification) {
         setPaused(false, reason: n.name.rawValue)
         // Both ScreenSaverEngine and legacyScreenSaver.appex can linger after
@@ -112,13 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // genuinely up. didstop is the event-precise dismissal signal, so
         // sweep shortly after it — unless the saver started again meanwhile.
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, !self.paused else { return }
-            for name in ["ScreenSaverEngine", "legacyScreenSaver"] {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-                p.arguments = ["-f", name]
-                try? p.run()
-            }
+            guard let self, !self.paused, !self.locked else { return }
+            self.sweepSaverProcesses()
             mlog("post-dismissal sweep of lingering saver processes")
         }
     }

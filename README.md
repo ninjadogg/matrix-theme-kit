@@ -13,7 +13,10 @@ statusline, and the spinner verbs running live in your browser.
 - **Live code-rain wallpaper** — a native Swift app that rains behind your
   desktop icons at native Retina scale, pauses when covered or while the
   screensaver runs, and survives login races.
-  **⌃⌥⌘M** launches the matching **screensaver** on demand.
+  **⌃⌥⌘M** launches the matching **screensaver** on demand — and the
+  **lock screen rains too**: locking your Mac starts the saver as the live
+  backdrop behind the clock and password prompt, it stops when the display
+  sleeps, and starts again the moment the display wakes while locked.
 - **Ghostty** theme with a GLSL shader that rains *behind* your terminal text
   (with a halo so text stays readable), plus matching **Terminal.app** profiles.
 - **SketchyBar HUD** — braille logo, `「 App 」` front-app, an animated 21-cell
