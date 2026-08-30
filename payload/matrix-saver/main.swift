@@ -18,7 +18,7 @@ func mlog(_ s: String) {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windows: [NSWindow] = []
     private var views: [MatrixRainView] = []
-    private var animTimer: Timer?
+    private var animTimer: DispatchSourceTimer?
     private var watchTimer: Timer?
     private var onBattery = false
     private var tickParity = 0
@@ -37,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Both fallbacks were tried and both were worse than none.
     private var paused = false
     private var frames = 0
+    private var ticks = 0
+    private var visibleTicks = 0
+    private var wasVisible = false
     private var lastFPSReport = Date()
     private var activity: NSObjectProtocol?
 
@@ -55,10 +58,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ensureHotKey()
         rebuild(reason: "startup")
 
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / MatrixRainView.saverFPS, repeats: true) { [weak self] _ in
-            self?.step()
-        }
-        RunLoop.main.add(animTimer!, forMode: .common)
+        // A .strict dispatch timer opts out of timer coalescing entirely —
+        // Low Power Mode (which this Mac enables on battery) coalesces plain
+        // Timer/RunLoop timers even for App-Nap-exempt processes.
+        let t = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        t.schedule(deadline: .now(), repeating: 1.0 / MatrixRainView.saverFPS, leeway: .milliseconds(2))
+        t.setEventHandler { [weak self] in self?.step() }
+        t.resume()
+        animTimer = t
 
         watchTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             self?.watchdog()
@@ -134,20 +141,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func step() {
         if paused { return }
+        ticks += 1
         // No battery half-rate: measured cost is ~0.2% of a core — the real
         // savings come from occlusion gating and the pause-under-saver flag.
-        var drew = false
-        for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
-            views[i].animateOneFrame()
-            drew = true
+        let visible = windows.contains { $0.occlusionState.contains(.visible) }
+        if visible {
+            visibleTicks += 1
+            if !wasVisible {
+                // Coming out from under opaque windows: repaint immediately so
+                // the reveal never shows a stale frame.
+                views.forEach { $0.needsDisplay = true }
+            }
+            for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
+                views[i].animateOneFrame()
+            }
+            frames += 1
         }
-        if drew { frames += 1 }
+        wasVisible = visible
         let now = Date()
         let dt = now.timeIntervalSince(lastFPSReport)
         if dt >= 10 {
             let scale = views.first?.scaleDebug ?? "no views"
-            mlog(String(format: "fps=%.1f (\(frames) frames/%.0fs) \(scale)", Double(frames)/dt, dt))
-            frames = 0; lastFPSReport = now
+            mlog(String(format: "ticks=\(ticks) visible=\(visibleTicks) drew=\(frames) over %.0fs (visible-fps=%.1f) \(scale)",
+                        dt, visibleTicks > 0 ? Double(frames)/dt * Double(ticks)/Double(visibleTicks) : 0))
+            frames = 0; ticks = 0; visibleTicks = 0; lastFPSReport = now
         }
     }
 
