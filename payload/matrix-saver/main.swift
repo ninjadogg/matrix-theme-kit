@@ -158,7 +158,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for name in ["ScreenSaverEngine", "legacyScreenSaver"] {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            p.arguments = ["-f", name]
+            // -x matches the process NAME exactly. -f matches the whole
+            // command line, so it also killed any unrelated process that
+            // merely mentioned the name — a shell running a grep for it, an
+            // editor with the file open, a script like this one. Verified
+            // that -x still matches: the names are 17 chars, and pkill does
+            // not truncate them the way p_comm does at 16.
+            p.arguments = ["-x", name]
             try? p.run()
         }
     }
