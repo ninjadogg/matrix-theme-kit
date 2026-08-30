@@ -2,6 +2,10 @@
 
 Turn a whole Mac phosphor green (`#00ff41` on near-black) with one command.
 
+**[Live demo — The Operator's Rig](https://claude.ai/code/artifact/1a2eefeb-02f1-49b4-9f88-1efcd8ac6c92)** —
+an interactive tour of the kit with the code rain, the animated katakana
+statusline, and the spinner verbs running live in your browser.
+
 ![Matrix rain screensaver](payload/matrix-saver/preview.png)
 
 ## What you get
