@@ -11,6 +11,15 @@ final class MatrixRainView: ScreenSaverView {
         var glyphs: [NSString]
     }
 
+    /// Screensaver frame rate. Only the saver uses this — the desktop wallpaper
+    /// drives animateOneFrame() from its own timer in main.swift.
+    ///
+    /// 12 rather than 15: the rain is deliberately steppy, so a fifth fewer
+    /// frames is nearly invisible while costing a fifth less CPU. Full-screen
+    /// glyph stamping across two displays is the single most expensive thing
+    /// this theme does.
+    static let saverFPS: Double = 12.0
+
     private static let pool: [NSString] = {
         var g: [NSString] = []
         for c in 0xFF66...0xFF9D {                      // half-width katakana
@@ -40,14 +49,14 @@ final class MatrixRainView: ScreenSaverView {
 
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
-        animationTimeInterval = 1.0 / 15.0
+        animationTimeInterval = 1.0 / Self.saverFPS
         configureLayer()
         buildGrid()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        animationTimeInterval = 1.0 / 15.0
+        animationTimeInterval = 1.0 / Self.saverFPS
         configureLayer()
         buildGrid()
     }
