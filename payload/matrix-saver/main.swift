@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ensureHotKey()
         rebuild(reason: "startup")
 
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 8.0, repeats: true) { [weak self] _ in
+        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / MatrixRainView.saverFPS, repeats: true) { [weak self] _ in
             self?.step()
         }
         RunLoop.main.add(animTimer!, forMode: .common)
@@ -109,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func step() {
         if paused { return }
         tickParity ^= 1
-        if onBattery && tickParity == 0 { return }        // 4fps on battery
+        if onBattery && tickParity == 0 { return }        // half rate on battery
         for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
             views[i].animateOneFrame()
         }

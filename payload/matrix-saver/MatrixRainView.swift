@@ -11,8 +11,8 @@ final class MatrixRainView: ScreenSaverView {
         var glyphs: [NSString]
     }
 
-    /// Screensaver frame rate. Only the saver uses this — the desktop wallpaper
-    /// drives animateOneFrame() from its own timer in main.swift.
+    /// Shared frame rate: the saver's animationTimeInterval, and the rate the
+    /// wallpaper's own timer in main.swift targets (halved on battery).
     ///
     /// 12 rather than 15: the rain is deliberately steppy, so a fifth fewer
     /// frames is nearly invisible while costing a fifth less CPU. Full-screen
@@ -42,10 +42,12 @@ final class MatrixRainView: ScreenSaverView {
     private var font = NSFont(name: "Menlo", size: 16)
         ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
 
-    /// Pixel density the layer and sprites are rasterized at. The screensaver
-    /// tracks the display's native backing scale so glyphs map 1:1 to device
-    /// pixels on Retina panels; the desktop wallpaper stays at 1x — it animates
-    /// continuously behind windows, so it trades sharpness for CPU.
+    /// Pixel density the layer and sprites are rasterized at: the display's
+    /// native backing scale, so glyphs map 1:1 to device pixels on Retina
+    /// panels. The wallpaper renders native too — occlusion gating, the
+    /// pause-under-saver flag, and its sparser grid keep its measured cost
+    /// negligible (~0.1% CPU over a day), so 1x rendering bought nothing
+    /// but blur.
     private var renderScale: CGFloat = 1
     /// Size the current column grid was built for; lets setFrameSize rebuild
     /// only on a real change (legacyScreenSaver can hand the view a
@@ -79,9 +81,8 @@ final class MatrixRainView: ScreenSaverView {
     }
 
     private func updateRenderScale() {
-        let native = window?.backingScaleFactor
+        let s = window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor ?? 2
-        let s = Self.desktopMode ? 1 : native
         guard s != renderScale || layer?.contentsScale != s else { return }
         renderScale = s
         layer?.contentsScale = s
