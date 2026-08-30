@@ -42,6 +42,16 @@ final class MatrixRainView: ScreenSaverView {
     private var font = NSFont(name: "Menlo", size: 16)
         ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
 
+    /// Pixel density the layer and sprites are rasterized at. The screensaver
+    /// tracks the display's native backing scale so glyphs map 1:1 to device
+    /// pixels on Retina panels; the desktop wallpaper stays at 1x — it animates
+    /// continuously behind windows, so it trades sharpness for CPU.
+    private var renderScale: CGFloat = 1
+    /// Size the current column grid was built for; lets setFrameSize rebuild
+    /// only on a real change (legacyScreenSaver can hand the view a
+    /// placeholder frame and resize it later, once per display).
+    private var gridSize: NSSize = .zero
+
     private let cHead   = NSColor(srgbRed: 0.91, green: 1.00, blue: 0.91, alpha: 1)
     private let cBright = NSColor(srgbRed: 0.40, green: 1.00, blue: 0.53, alpha: 1)
     private let cMid    = NSColor(srgbRed: 0.00, green: 1.00, blue: 0.25, alpha: 1)
@@ -64,14 +74,35 @@ final class MatrixRainView: ScreenSaverView {
 
     private func configureLayer() {
         wantsLayer = true
-        layer?.contentsScale = 1.0
-        layer?.magnificationFilter = .nearest
         layer?.drawsAsynchronously = true
+        updateRenderScale()
+    }
+
+    private func updateRenderScale() {
+        let native = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 2
+        let s = Self.desktopMode ? 1 : native
+        guard s != renderScale || layer?.contentsScale != s else { return }
+        renderScale = s
+        layer?.contentsScale = s
+        layer?.magnificationFilter = .nearest
+        Self.glyphCache.removeAll()      // sprites are scale-specific
+        needsDisplay = true
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        layer?.contentsScale = 1.0        // resist the window's 2x backing scale
+        updateRenderScale()              // display changed under us; re-match it
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateRenderScale()              // backing scale is only knowable here
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if newSize != gridSize { buildGrid() }
     }
 
     private func buildGrid() {
@@ -85,6 +116,7 @@ final class MatrixRainView: ScreenSaverView {
         rows = max(1, Int(bounds.height / cellH))
         let ncols = max(1, Int(bounds.width / cellW)) + 2
         columns = (0..<ncols).map { _ in makeColumn(initial: true) }
+        gridSize = bounds.size
     }
 
     private func makeColumn(initial: Bool) -> Column {
@@ -102,7 +134,7 @@ final class MatrixRainView: ScreenSaverView {
 
     override func resize(withOldSuperviewSize oldSize: NSSize) {
         super.resize(withOldSuperviewSize: oldSize)
-        buildGrid()
+        if bounds.size != gridSize { buildGrid() }
     }
 
     override func animateOneFrame() {
@@ -155,20 +187,25 @@ final class MatrixRainView: ScreenSaverView {
         }
     }
 
-    // Pre-rasterized CGImage per glyph/tier; stamping these with CGContext.draw
-    // is far cheaper than NSImage.draw, which re-resolves reps on every call.
+    // Pre-rasterized CGImage per glyph/tier, rendered at renderScale pixels but
+    // stamped at point size, so glyphs stay crisp on any display density.
+    // Stamping with CGContext.draw is far cheaper than NSImage.draw, which
+    // re-resolves reps on every call.
     private func sprite(_ glyph: NSString, _ tier: Int) -> Sprite? {
-        let key = "\(Int(font.pointSize))|\(tier)|\(glyph)"
+        let key = "\(Int(font.pointSize))|\(tier)|\(renderScale)|\(glyph)"
         if let cached = Self.glyphCache[key] { return cached }
         let color = [cHead, cBright, cMid, cDim][tier]
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let sz = glyph.size(withAttributes: attrs)
         let w = max(1, Int(ceil(sz.width)))
         let h = max(1, Int(ceil(sz.height)))
+        let pw = max(1, Int(ceil(CGFloat(w) * renderScale)))
+        let ph = max(1, Int(ceil(CGFloat(h) * renderScale)))
         guard let cg = CGContext(
-            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        cg.scaleBy(x: renderScale, y: renderScale)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: false)
         glyph.draw(at: .zero, withAttributes: attrs)
