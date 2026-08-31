@@ -12,7 +12,7 @@ final class MatrixRainView: ScreenSaverView {
     }
 
     /// Shared frame rate: the saver's animationTimeInterval, and the rate the
-    /// wallpaper's own timer in main.swift targets (halved on battery).
+    /// wallpaper's own timer in main.swift targets.
     ///
     /// 12 rather than 15: the rain is deliberately steppy, so a fifth fewer
     /// frames is nearly invisible while costing a fifth less CPU. Full-screen
@@ -96,6 +96,7 @@ final class MatrixRainView: ScreenSaverView {
     /// AppKit asks before propagating a window's backing scale to the layer;
     /// without this it may leave (or reset) contentsScale at 1x and the layer
     /// gets nearest-upscaled — the exact blur this class works to avoid.
+    @objc(layer:shouldInheritContentsScale:fromWindow:)
     func layer(_ layer: CALayer, shouldInheritContentsScale newScale: CGFloat,
                from window: NSWindow) -> Bool {
         true
@@ -135,7 +136,10 @@ final class MatrixRainView: ScreenSaverView {
         // to a full cell — cos(0)=1 means maximum upward shift at launch, so
         // without overscan the saver opens with a black band along the bottom.
         rows = max(1, Int(ceil(bounds.height / cellH)) + 3)
-        let ncols = max(1, Int(bounds.width / cellW)) + 2
+        // Same overscan as rows: the drift shifts the lattice up to a full
+        // cell horizontally too, so floor()+2 left a black band at the right
+        // edge at the drift extreme.
+        let ncols = max(1, Int(ceil(bounds.width / cellW)) + 3)
         columns = (0..<ncols).map { _ in makeColumn(initial: true) }
         gridSize = bounds.size
     }

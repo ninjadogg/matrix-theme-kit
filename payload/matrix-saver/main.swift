@@ -20,8 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var views: [MatrixRainView] = []
     private var animTimer: DispatchSourceTimer?
     private var watchTimer: Timer?
-    private var onBattery = false
-    private var tickParity = 0
+    private var onBattery = false     // diagnostic only: feeds the power log line
     private var hotkeyOK = false
     /// The desktop window still reports occlusionState .visible underneath a
     /// running screensaver, so the guard in step() never fires and we draw rain
@@ -37,7 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Both fallbacks were tried and both were worse than none.
     private var paused = false
     private var locked = false
-    private var frames = 0
     private var ticks = 0
     private var visibleTicks = 0
     private var wasVisible = false
@@ -128,30 +126,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func onPause(_ n: Notification)  { setPaused(true,  reason: n.name.rawValue) }
 
-    @objc private func onLock(_ n: Notification) {
-        locked = true
-        setPaused(true, reason: n.name.rawValue)
-        launchSaverIfNeeded(reason: "screen locked")
-    }
+    @objc private func onLock(_ n: Notification)   { lockStateChanged(true,  reason: n.name.rawValue) }
+    @objc private func onUnlock(_ n: Notification) { lockStateChanged(false, reason: n.name.rawValue) }
 
-    @objc private func onUnlock(_ n: Notification) {
-        locked = false
-        setPaused(false, reason: n.name.rawValue)
-        // The saver engine is dismissed by authentication; sweep any lingerers.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, !self.paused else { return }
-            self.sweepSaverProcesses()
-            mlog("post-unlock sweep of lingering saver processes")
+    private func lockStateChanged(_ isLocked: Bool, reason: String) {
+        locked = isLocked
+        setPaused(isLocked, reason: reason)
+        if isLocked {
+            launchSaverIfNeeded(reason: "screen locked")
+        } else {
+            // The saver engine is dismissed by authentication; sweep lingerers.
+            scheduleSweep(reason: "post-unlock")
         }
     }
 
     private func launchSaverIfNeeded(reason: String) {
-        let engineRunning = NSWorkspace.shared.runningApplications.contains {
-            $0.bundleIdentifier == "com.apple.ScreenSaver.Engine"
+        // A dark panel renders to nobody: locks that follow display sleep
+        // (common with 'require password after sleep begins') must not start
+        // the saver — the wake handler launches it when there's something to
+        // see.
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0 else {
+            mlog("lock-screen rain: display asleep, deferring launch (\(reason))")
+            return
         }
-        guard !engineRunning else { return }
+        guard !engineRunning() else { return }
+        // Engine absent + appex alive is by definition an orphan (lock -> quick
+        // unlock -> re-lock can strand one inside the sweep grace); clear it so
+        // the fresh engine doesn't run alongside a second animating appex.
+        if processRunning("legacyScreenSaver") {
+            sweepSaverProcesses()
+        }
         matrixStartScreensaver()
         mlog("lock-screen rain: launched saver (\(reason))")
+    }
+
+    /// Shared delayed sweep: skips if the saver is (or is about to be) up —
+    /// paused/locked re-set, or an engine we launched within the grace window
+    /// hasn't posted didstart yet (login-race machines take their time).
+    private func scheduleSweep(reason: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, !self.paused, !self.locked,
+                  Date().timeIntervalSince(matrixLastSaverLaunch) > 15 else { return }
+            self.sweepSaverProcesses()
+            mlog("sweep of lingering saver processes (\(reason))")
+        }
     }
 
     private func sweepSaverProcesses() {
@@ -173,18 +191,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Both ScreenSaverEngine and legacyScreenSaver.appex can linger after
         // dismissal, animating offscreen; a headless lingering engine also
         // blinds the launchd watchdog, whose rule is engine-alive == saver
-        // genuinely up. didstop is the event-precise dismissal signal, so
-        // sweep shortly after it — unless the saver started again meanwhile.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, !self.paused, !self.locked else { return }
-            self.sweepSaverProcesses()
-            mlog("post-dismissal sweep of lingering saver processes")
-        }
+        // genuinely up. didstop is the event-precise dismissal signal.
+        scheduleSweep(reason: "post-dismissal")
     }
 
     private func setPaused(_ p: Bool, reason: String) {
         guard p != paused else { return }
         paused = p
+        // Suspend the coalescing-exempt timer while paused: 12 wakeups/s for
+        // the whole duration of every lock would be pure waste. Balanced by
+        // the p != paused guard.
+        if p { animTimer?.suspend() } else { animTimer?.resume() }
         mlog(p ? "paused (\(reason))" : "resumed (\(reason))")
     }
 
@@ -214,16 +231,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for (i, w) in windows.enumerated() where w.occlusionState.contains(.visible) {
                 views[i].animateOneFrame()
             }
-            frames += 1
         }
         wasVisible = visible
         let now = Date()
         let dt = now.timeIntervalSince(lastFPSReport)
         if dt >= 10 {
             let scale = views.first?.scaleDebug ?? "no views"
-            mlog(String(format: "ticks=\(ticks) visible=\(visibleTicks) drew=\(frames) over %.0fs (visible-fps=%.1f) \(scale)",
-                        dt, visibleTicks > 0 ? Double(frames)/dt * Double(ticks)/Double(visibleTicks) : 0))
-            frames = 0; ticks = 0; visibleTicks = 0; lastFPSReport = now
+            // tick-rate proves the timer isn't coalesced; visible counts the
+            // ticks that actually drew (a draw happens on every visible tick,
+            // so visible/dt IS the on-screen frame rate).
+            mlog(String(format: "ticks=\(ticks) visible=\(visibleTicks) over %.0fs (tick-rate=%.1f/s) \(scale)",
+                        dt, Double(ticks)/dt))
+            ticks = 0; visibleTicks = 0; lastFPSReport = now
         }
     }
 
@@ -232,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func watchdog() {
         ensureHotKey()
         checkPower()
+        reconcileSaverState()
 
         if windows.count != NSScreen.screens.count {
             rebuild(reason: "screen count \(windows.count) != \(NSScreen.screens.count)")
@@ -246,6 +266,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.orderFrontRegardless()
             mlog("reasserted a window (visible=\(w.isVisible))")
         }
+    }
+
+    /// DNC delivery is best-effort and this agent can be relaunched mid-saver,
+    /// so a missed notification could wedge paused/locked forever. Re-derive
+    /// what CAN be re-derived every watchdog tick:
+    ///  - locked: the session dictionary is ground truth in both directions.
+    ///  - paused stuck true: a saver cannot be displaying with no engine and
+    ///    no appex alive — process ABSENCE is reliable (presence is not: the
+    ///    appex lingers after dismissal, so it must never set paused).
+    ///  - display asleep with an engine alive: nothing is visible, whatever
+    ///    the engine's legitimacy — sweep it (wake-while-locked relaunches).
+    private func reconcileSaverState() {
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let sysLocked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        if sysLocked != locked {
+            mlog("watchdog: reconciling locked \(locked) -> \(sysLocked)")
+            lockStateChanged(sysLocked, reason: "watchdog reconcile")
+        }
+        let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+        if displayAsleep, engineRunning(),
+           Date().timeIntervalSince(matrixLastSaverLaunch) > 15 {
+            sweepSaverProcesses()
+            mlog("watchdog: swept saver rendering against a sleeping display")
+        }
+        if paused, !locked, !engineRunning(), !processRunning("legacyScreenSaver") {
+            setPaused(false, reason: "watchdog: no saver processes alive")
+        }
+    }
+
+    private func engineRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == "com.apple.ScreenSaver.Engine"
+        }
+    }
+
+    private func processRunning(_ exactName: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-x", exactName]
+        p.standardOutput = FileHandle.nullDevice
+        do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 }
+        catch { return false }
     }
 
     private func checkPower() {
