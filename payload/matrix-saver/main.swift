@@ -41,7 +41,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var wasVisible = false
     private var lastFPSReport = Date()
     private var activity: NSObjectProtocol?
+    /// didChangeScreenParameters arrives in bursts (twice inside one second,
+    /// observed) and fires for far more than real display changes -- an app
+    /// going fullscreen or a window crossing displays is enough. Rebuilding
+    /// there is what the user sees as the desktop "relaunching": it drops every
+    /// view, resets the rain to a blank grid, and stalls the main thread for
+    /// seconds. Coalesce the burst, then rebuild only if geometry actually moved.
 
+    private var screenSignature = ""
+    private var rebuildDebounce: DispatchWorkItem?
+
+    /// The documented-standard level for a desktop wallpaper window, and what
+    /// this has always shipped. Measured live stack (2026-08-31):
+    ///     -2147483626  Window Server
+    ///     -2147483624  Dock
+    ///     -2147483623  .desktopWindow  <- us
+    ///     -2147483622  Dock  <- full-screen: the wallpaper, ABOVE us
+    ///     -2147483603  .desktopIconWindow
+    /// So on current macOS the wallpaper is drawn by DOCK (not Finder) and one
+    /// of its windows outranks us. That looks alarming but is benign in
+    /// practice -- the rain has always rendered correctly here. Moving to
+    /// desktopIconWindow-1 to break the tie WAS tried against the
+    /// fullscreen-exit wallpaper flash and changed nothing, so it was reverted
+    /// rather than keep an unjustified deviation from the standard config.
     private var desktopLevel: NSWindow.Level {
         NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
     }
@@ -79,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.didLaunchApplicationNotification,
         ] {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.watchdog()
+                self?.reassertWindows(src: name.rawValue)
             }
         }
 
@@ -117,10 +139,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.launchSaverIfNeeded(reason: "display woke while locked")
             }
         }
+        // needsDisplay only SCHEDULES a repaint, and the next 12fps tick can be
+        // 83ms away -- long enough for a fullscreen-exit animation to composite
+        // our stale surface and show Dock's wallpaper through. React to the
+        // occlusion event itself and paint synchronously.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: nil, queue: .main) { [weak self] n in
+                guard let self, let w = n.object as? NSWindow,
+                      let i = self.windows.firstIndex(of: w),
+                      w.occlusionState.contains(.visible) else { return }
+                self.views[i].animateOneFrame()
+                self.views[i].display()
+                self.wasVisible = true
+        }
+
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
-                self?.rebuild(reason: "screen change")
+                self?.scheduleRebuild(reason: "screen change")
         }
     }
 
@@ -220,8 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ticks += 1
         // No battery half-rate: measured cost is ~0.2% of a core — the real
         // savings come from occlusion gating and the pause-under-saver flag.
-        let visible = windows.contains { $0.occlusionState.contains(.visible) }
-        if visible {
+        let onScreen = windows.contains { $0.occlusionState.contains(.visible) }
+        if onScreen {
             visibleTicks += 1
             if !wasVisible {
                 // Coming out from under opaque windows: repaint immediately so
@@ -232,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 views[i].animateOneFrame()
             }
         }
-        wasVisible = visible
+        wasVisible = onScreen
         let now = Date()
         let dt = now.timeIntervalSince(lastFPSReport)
         if dt >= 10 {
@@ -248,10 +285,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - watchdog
 
-    private func watchdog() {
-        ensureHotKey()
-        checkPower()
-        reconcileSaverState()
+    /// Space changes and app launches fire constantly -- every Cmd-Tab into an
+    /// app on another Space lands here. They only need the cheap "did Finder
+    /// bury our window" check, so do NOT run the full watchdog: its power and
+    /// saver-state reconciliation blocks the main thread (measured 71-111ms),
+    /// which stalls the 12fps render timer and reads as a stutter on every
+    /// window switch. The 3s timer still runs the full reconciliation.
+    private func reassertWindows(src: String) {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        guard windows.count == NSScreen.screens.count, !windows.isEmpty else {
+            rebuild(reason: "reassert(\(src)): window/screen mismatch")
+            return
+        }
+        for w in windows where !w.isVisible || w.level != desktopLevel {
+            w.level = desktopLevel
+            w.orderFrontRegardless()
+            mlog("reasserted a window (visible=\(w.isVisible))")
+        }
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        if ms > 20 { mlog(String(format: "reassert slow: %.0fms src=%@", ms, src)) }
+    }
+
+    private func watchdog(src: String = "timer") {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        var marks: [String] = []
+        var t = t0
+        func mark(_ label: String) {
+            let now = CFAbsoluteTimeGetCurrent()
+            marks.append(String(format: "%@=%.0f", label, (now - t) * 1000))
+            t = now
+        }
+        defer {
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            if ms > 20 { mlog(String(format: "watchdog slow: %.0fms src=%@ [%@]", ms, src, marks.joined(separator: " "))) }
+        }
+        ensureHotKey();        mark("hotkey")
+        checkPower();          mark("power")
+        reconcileSaverState(); mark("saverstate")
 
         if windows.count != NSScreen.screens.count {
             rebuild(reason: "screen count \(windows.count) != \(NSScreen.screens.count)")
@@ -266,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.orderFrontRegardless()
             mlog("reasserted a window (visible=\(w.isVisible))")
         }
+        mark("windows")
     }
 
     /// DNC delivery is best-effort and this agent can be relaunched mid-saver,
@@ -277,14 +348,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///    appex lingers after dismissal, so it must never set paused).
     ///  - display asleep with an engine alive: nothing is visible, whatever
     ///    the engine's legitimacy — sweep it (wake-while-locked relaunches).
+    /// CGSessionCopyCurrentDictionary is a WindowServer round-trip and measured
+    /// 38-48ms on the main thread -- half a frame at 12fps, every 3s. This is a
+    /// safety net, not a live control path, so a one-cycle lag costs nothing:
+    /// sample off-thread, then apply on main.
     private func reconcileSaverState() {
-        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-        let sysLocked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        DispatchQueue.global(qos: .utility).async {
+            let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+            let sysLocked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+            let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+            DispatchQueue.main.async { [weak self] in
+                self?.applySaverState(sysLocked: sysLocked, displayAsleep: displayAsleep)
+            }
+        }
+    }
+
+    /// The remaining probes here (engineRunning, processRunning->pgrep) are only
+    /// reached when the display is asleep or we are already paused -- i.e. when
+    /// nothing is being rendered, so a stall there is invisible by construction.
+    private func applySaverState(sysLocked: Bool, displayAsleep: Bool) {
         if sysLocked != locked {
             mlog("watchdog: reconciling locked \(locked) -> \(sysLocked)")
             lockStateChanged(sysLocked, reason: "watchdog reconcile")
         }
-        let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
         if displayAsleep, engineRunning(),
            Date().timeIntervalSince(matrixLastSaverLaunch) > 15 {
             sweepSaverProcesses()
@@ -310,9 +396,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catch { return false }
     }
 
+    /// IOPSCopyPowerSourcesInfo measured 48ms of a 63ms watchdog -- more than
+    /// half a frame at 12fps, burned every 3s on the main thread. onBattery is
+    /// diagnostic only (it feeds the log line and nothing else), so there is no
+    /// reason to make the render timer wait on it. Query off-thread and hop back
+    /// to main only to record a CHANGE.
     private func checkPower() {
-        let b = Self.runningOnBattery()
-        if b != onBattery { onBattery = b; mlog("power: \(b ? "battery" : "AC")") }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let b = Self.runningOnBattery()
+            DispatchQueue.main.async {
+                guard let self, b != self.onBattery else { return }
+                self.onBattery = b
+                mlog("power: \(b ? "battery" : "AC")")
+            }
+        }
     }
 
     private static func runningOnBattery() -> Bool {
@@ -330,12 +427,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - windows
 
+    /// Coalesce a burst of screen-parameter notifications into one evaluation.
+    private func scheduleRebuild(reason: String) {
+        rebuildDebounce?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rebuild(reason: reason) }
+        rebuildDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func screenGeometrySignature(_ screens: [NSScreen]) -> String {
+        screens.map { s in
+            let f = s.frame
+            return "\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width)),\(Int(f.height))@\(s.backingScaleFactor)"
+        }.joined(separator: "|")
+    }
+
     private func rebuild(reason: String) {
         let screens = NSScreen.screens
         guard !screens.isEmpty else {
             mlog("rebuild(\(reason)) skipped: no screens yet, watchdog will retry")
             return
         }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let sig = screenGeometrySignature(screens)
+
+        // The display layout did not move. Reassert the cheap window properties
+        // and leave the rain running rather than tearing every view down.
+        if sig == screenSignature, windows.count == screens.count, !windows.isEmpty {
+            for (w, screen) in zip(windows, screens) {
+                if w.frame != screen.frame { w.setFrame(screen.frame, display: true) }
+                w.level = desktopLevel
+                w.orderFrontRegardless()
+            }
+            mlog("rebuild(\(reason)) skipped: geometry unchanged")
+            return
+        }
+
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll(); views.removeAll()
 
@@ -345,6 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let w = NSWindow(contentRect: screen.frame, styleMask: .borderless,
                              backing: .buffered, defer: false)
             w.level = desktopLevel
+            // Dropping .stationary was tried against the fullscreen-exit flash
+            // (2026-08-31) and made the hang WORSE. This trio is also the
+            // documented-standard config for a desktop wallpaper window.
             w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
             w.ignoresMouseEvents = true
             w.isOpaque = true
@@ -355,7 +485,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.orderFrontRegardless()
             windows.append(w); views.append(v)
         }
-        mlog("rebuild(\(reason)): \(windows.count) window(s) on \(screens.count) screen(s)")
+        screenSignature = sig
+        let rms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        mlog(String(format: "rebuild(\(reason)): \(windows.count) window(s) on \(screens.count) screen(s) [\(sig)] took %.0fms", rms))
     }
 }
 

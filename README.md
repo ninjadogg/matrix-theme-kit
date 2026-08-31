@@ -113,6 +113,12 @@ grid so they look identical.
   stays visible there.
 - The wallpaper app is unsigned (ad-hoc, built on your machine); macOS may ask
   for approval under Privacy & Security on first login.
+- Leaving a fullscreen app can flash the system wallpaper through for a frame
+  before the rain reappears. This is a known open issue and is **not** caused
+  by the window level, the `collectionBehavior` flags, or the rain's own
+  drawing — all three were measured and ruled out (see the private repo's
+  notes). The desktop window level and collection behavior here are the
+  documented-standard ones; don't "fix" them speculatively.
 
 ## Credits
 

@@ -163,6 +163,12 @@ final class MatrixRainView: ScreenSaverView {
         // Desktop mode only: skip frames while covered. Never gate the saver on
         // occlusion — legacyScreenSaver.appex hosts the view in an offscreen
         // proxy window whose occlusionState never reads visible.
+        //
+        // Do NOT add a "keep the surface warm while covered" bypass here: it was
+        // tried against the fullscreen-exit wallpaper flash (2026-08-31) and
+        // MEASURED as no help at all, while costing ~7% of the machine and
+        // starving this very timer down to 4.9fps at full rate. The flash is not
+        // our content going stale.
         if Self.desktopMode, let w = window,
            !(w.isVisible && w.occlusionState.contains(.visible)) { return }
         tick += 1
