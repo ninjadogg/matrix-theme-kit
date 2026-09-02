@@ -235,20 +235,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func sweepSaverProcesses() {
-        for name in ["ScreenSaverEngine", "legacyScreenSaver"] {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            // -x matches the process NAME exactly. -f matches the whole
-            // command line, so it also killed any unrelated process that
-            // merely mentioned the name — a shell running a grep for it, an
-            // editor with the file open, a script like this one. Verified
-            // that -x still matches: the names are 17 chars, and pkill does
-            // not truncate them the way p_comm does at 16.
-            p.arguments = ["-x", name]
-            try? p.run()
-        }
-    }
+    /// Shared with the hotkey launch path; the implementation lives in
+    /// hotkey.swift so there is exactly one pkill.
+    private func sweepSaverProcesses() { matrixSweepSaverProcesses() }
     @objc private func onResume(_ n: Notification) {
         setPaused(false, reason: n.name.rawValue)
         // Both ScreenSaverEngine and legacyScreenSaver.appex can linger after
@@ -414,12 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func processRunning(_ exactName: String) -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-x", exactName]
-        p.standardOutput = FileHandle.nullDevice
-        do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 }
-        catch { return false }
+        matrixProcessRunning(exactName)
     }
 
     /// IOPSCopyPowerSourcesInfo measured 48ms of a 63ms watchdog -- more than
