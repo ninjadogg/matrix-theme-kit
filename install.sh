@@ -14,6 +14,25 @@ expand() { sed "s|__HOME__|$HOME|g" "$1"; }
 note()   { print -P "%F{2}$1%f"; }
 warn()   { print -P "%F{3}skip: $1%f"; }
 
+# bootout is ASYNCHRONOUS. Bootstrapping straight after it races launchd's
+# teardown and fails with "Bootstrap failed: 5: Input/output error", leaving the
+# agent unloaded while the script reports success -- observed 2026-09-02, it
+# left the wallpaper dead. Wait for the service to go, then retry.
+reload_agent() {          # $1 = label, $2 = plist path
+  local label="$1" plist="$2" i
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  for i in {1..50}; do
+    launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  for i in {1..10}; do
+    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null && return 0
+    sleep 0.5
+  done
+  warn "could not bootstrap $label"
+  return 1
+}
+
 print -P "%B%F{2}— Matrix theme kit: jacking in —%f%b"
 
 # ── 1. Shell ─────────────────────────────────────────────────────────
@@ -104,8 +123,7 @@ if [ -n "$SB" ]; then
   chmod +x ~/.config/sketchybar/sketchybarrc ~/.config/sketchybar/plugins/*.sh
   expand "$P/launchagents/local.matrix.sketchybar.plist" \
     | sed "s|$HOME/.local/bin/sketchybar|$SB|" > ~/Library/LaunchAgents/local.matrix.sketchybar.plist
-  launchctl bootout gui/$(id -u)/local.matrix.sketchybar 2>/dev/null || true
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.matrix.sketchybar.plist
+  reload_agent local.matrix.sketchybar ~/Library/LaunchAgents/local.matrix.sketchybar.plist || true
   note "sketchybar: HUD config installed and agent loaded"
 else
   warn "sketchybar not installed — HUD step skipped"
@@ -152,8 +170,7 @@ if command -v swiftc >/dev/null 2>&1; then
   rm -rf "$HOME/Library/Screen Savers/MatrixRain.saver"
   cp -R MatrixRain.saver "$HOME/Library/Screen Savers/"
   expand "$P/launchagents/local.matrixrain.wallpaper.plist" > ~/Library/LaunchAgents/local.matrixrain.wallpaper.plist
-  launchctl bootout gui/$(id -u)/local.matrixrain.wallpaper 2>/dev/null || true
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.matrixrain.wallpaper.plist
+  reload_agent local.matrixrain.wallpaper ~/Library/LaunchAgents/local.matrixrain.wallpaper.plist || true
   cd "$KIT"
   note "wallpaper: live-rain agent loaded (⌃⌥⌘M launches the screensaver on demand)"
   note "screensaver: pick 'MatrixRain' in System Settings → Screen Saver"
