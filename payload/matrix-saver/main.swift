@@ -197,13 +197,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mlog("lock-screen rain: launched saver (\(reason))")
     }
 
+    /// How long after didstop the sweep first runs, and how long after a launch
+    /// an engine is protected from it. These two were independent literals (8
+    /// and 15) and silently contradicted each other -- see scheduleSweep.
+    private static let sweepDelay: TimeInterval = 8
+    private static let launchGrace: TimeInterval = 15
+
     /// Shared delayed sweep: skips if the saver is (or is about to be) up —
     /// paused/locked re-set, or an engine we launched within the grace window
     /// hasn't posted didstart yet (login-race machines take their time).
-    private func scheduleSweep(reason: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, !self.paused, !self.locked,
-                  Date().timeIntervalSince(matrixLastSaverLaunch) > 15 else { return }
+    ///
+    /// The grace is a DEFERRAL, not a cancellation. The old code ran one shot at
+    /// didstop+8 and returned outright if the launch was younger than 15s, so
+    /// whenever didstop landed within (15-8)=7s of our own launch the sweep
+    /// always fired inside its own grace and dropped silently, with nothing
+    /// rescheduling it. `display woke while locked` posts didstop in the same
+    /// second we launch, so it hit that window every time; the engine then
+    /// survived forever, because applySaverState only sweeps while the display
+    /// is ASLEEP. Measured: engines stranded at 0s/0s/2s gaps, swept at
+    /// 10s/20s/37s/54s/229s -- no exceptions in 8 events.
+    ///
+    /// Re-arm for whatever grace is left instead, and log it: a silent return is
+    /// what disguised a deterministic leak as an unreproducible ghost.
+    private func scheduleSweep(reason: String, after delay: TimeInterval? = nil) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (delay ?? Self.sweepDelay)) { [weak self] in
+            guard let self, !self.paused, !self.locked else { return }
+            let sinceLaunch = Date().timeIntervalSince(matrixLastSaverLaunch)
+            guard sinceLaunch > Self.launchGrace else {
+                let remaining = Self.launchGrace - sinceLaunch
+                mlog(String(format: "sweep deferred %.1fs inside launch grace (%@)",
+                            remaining, reason))
+                self.scheduleSweep(reason: reason, after: remaining + 0.5)
+                return
+            }
             self.sweepSaverProcesses()
             mlog("sweep of lingering saver processes (\(reason))")
         }
@@ -372,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lockStateChanged(sysLocked, reason: "watchdog reconcile")
         }
         if displayAsleep, engineRunning(),
-           Date().timeIntervalSince(matrixLastSaverLaunch) > 15 {
+           Date().timeIntervalSince(matrixLastSaverLaunch) > Self.launchGrace {
             sweepSaverProcesses()
             mlog("watchdog: swept saver rendering against a sleeping display")
         }
